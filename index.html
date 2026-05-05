@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Radar Real-time - Alvino</title>
+    <!-- Leaflet CSS untuk Peta -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <style>
+        body { margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        #map { height: 100vh; width: 100%; }
+        .control-panel {
+            position: absolute; top: 15px; left: 60px; z-index: 1000;
+            background: white; padding: 20px; border-radius: 12px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.3); width: 250px;
+        }
+        h2 { margin: 0 0 10px 0; font-size: 18px; color: #333; }
+        .status { font-size: 14px; margin-bottom: 8px; display: flex; align-items: center; }
+        .dot { height: 10px; width: 10px; border-radius: 50%; display: inline-block; margin-right: 8px; }
+        .dot-esp { background: #3498db; } /* Biru untuk ESP */
+        .dot-friend { background: #e74c3c; } /* Merah untuk Teman */
+        .btn-share {
+            background: #25d366; color: white; border: none; padding: 12px;
+            border-radius: 8px; cursor: pointer; width: 100%; font-weight: bold;
+            transition: 0.3s; margin-top: 10px;
+        }
+        .btn-share:hover { background: #1ebe57; }
+    </style>
+</head>
+<body>
+
+    <div class="control-panel">
+        <h2>Radar Alvino</h2>
+        <div class="status"><span class="dot dot-esp"></span> ESP8266 (Bukit Hijau)</div>
+        <div class="status"><span class="dot dot-friend"></span> Lokasi Teman</div>
+        <input type="text" id="namaTeman" placeholder="Masukkan namamu..." style="width: 90%; padding: 8px; margin-bottom: 10px; border: 1px solid #ddd; border-radius: 5px;">
+        <button class="btn-share" onclick="mulaiTracking()">Bagikan Lokasi Saya</button>
+    </div>
+
+    <div id="map"></div>
+
+    <!-- Firebase SDK -->
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js"></script>
+    <!-- Leaflet JS -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+    <script>
+        // 1. KONEKSI FIREBASE (Sesuai database kamu)
+        const firebaseConfig = {
+            databaseURL: "https://lacak-esp8266-24515-default-rtdb.asia-southeast1.firebasedatabase.app"
+        };
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.database();
+
+        // 2. INISIALISASI PETA (Default ke Malang)
+        var map = L.map('map').setView([-7.9265, 112.5975], 15);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '&copy; OpenStreetMap contributors'
+        }).addTo(map);
+
+        // Marker ESP8266 (Warna Biru Default)
+        var markerESP = L.marker([-7.9265, 112.5975]).addTo(map).bindPopup("<b>Alat ESP8266</b><br>Lokasi: Jl. Bukit Hijau");
+
+        // Objek untuk menampung marker teman-teman (biar bisa banyak orang)
+        var markersTeman = {};
+
+        // 3. LISTEN DATA ESP8266 (Real-time dari Alat)
+        db.ref('pelacak').on('value', (snap) => {
+            const val = snap.val();
+            if(val) markerESP.setLatLng([val.lat, val.lng]);
+        });
+
+        // 4. LISTEN DATA SEMUA TEMAN (Folder 'users' otomatis dibaca)
+        db.ref('users').on('value', (snap) => {
+            const allUsers = snap.val();
+            for (let name in allUsers) {
+                const pos = allUsers[name];
+                if (markersTeman[name]) {
+                    // Kalau marker sudah ada, update lokasinya
+                    markersTeman[name].setLatLng([pos.lat, pos.lng]);
+                } else {
+                    // Kalau folder baru muncul, buat marker merah baru
+                    markersTeman[name] = L.marker([pos.lat, pos.lng], {
+                        icon: L.icon({
+                            iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-red.png',
+                            shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
+                            iconSize: [25, 41], iconAnchor: [12, 41]
+                        })
+                    }).addTo(map).bindPopup("Teman: " + name);
+                }
+            }
+        });
+
+        // 5. FUNGSI UNTUK TEMAN (Membuat folder otomatis)
+        function mulaiTracking() {
+            const nama = document.getElementById('namaTeman').value;
+            if(!nama) { alert("Isi namamu dulu Vin/Bro!"); return; }
+
+            if (navigator.geolocation) {
+                alert("Berbagi lokasi aktif! Jangan tutup tab ini agar tetap realtime.");
+                
+                navigator.geolocation.watchPosition((position) => {
+                    const myLat = position.coords.latitude;
+                    const myLng = position.coords.longitude;
+
+                    // INI YANG BIKIN FOLDER OTOMATIS
+                    // Firebase akan otomatis membuat path: users -> [Nama]
+                    db.ref('users/' + nama).set({
+                        lat: myLat,
+                        lng: myLng,
+                        timestamp: Date.now()
+                    });
+                }, (err) => {
+                    alert("Gagal ambil GPS: " + err.message);
+                }, { enableHighAccuracy: true });
+            } else {
+                alert("Browser tidak mendukung GPS.");
+            }
+        }
+    </script>
+</body>
+</html>
