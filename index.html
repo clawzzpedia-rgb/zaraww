@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Radar Command Center Pro | Alvino</title>
+    
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700&display=swap" rel="stylesheet">
+    
+    <style>
+        :root { --primary: #c5a059; --dark: #121212; --glass: rgba(18, 18, 18, 0.96); --danger: #ff4d4d; --success: #2ecc71; }
+        body { margin: 0; padding: 0; font-family: 'Plus Jakarta Sans', sans-serif; background: #000; overflow: hidden; }
+        #map { height: 100vh; width: 100%; z-index: 1; }
+
+        .glass-panel {
+            position: absolute; top: 20px; left: 20px; z-index: 1000;
+            background: var(--glass); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 20px;
+            padding: 20px; color: white; box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+            max-width: 320px; width: calc(100% - 80px); transition: transform 0.5s ease;
+        }
+        .glass-panel.closed { transform: translateX(-360px); }
+
+        .toggle-ui {
+            position: absolute; top: 20px; left: 20px; z-index: 1001;
+            background: var(--primary); color: var(--dark); border: none;
+            width: 42px; height: 42px; border-radius: 12px; cursor: pointer;
+        }
+
+        .user-item {
+            padding: 15px; margin-bottom: 12px; background: rgba(255,255,255,0.05);
+            border-radius: 15px; border: 1px solid rgba(255,255,255,0.05);
+        }
+        
+        .admin-controls { display: flex; gap: 8px; margin-top: 12px; }
+        .btn-ctrl { flex: 1; border: none; padding: 10px; border-radius: 10px; font-size: 11px; font-weight: 700; cursor: pointer; color: white; transition: 0.3s; }
+        .btn-mute { background: var(--success); }
+        .btn-mute.active { background: var(--danger); animation: pulse-red 1.5s infinite; }
+        .btn-delete { background: rgba(255,255,255,0.1); color: var(--danger); }
+
+        @keyframes pulse-red { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }
+
+        input { width: 100%; box-sizing: border-box; border: 1px solid rgba(255,255,255,0.1); background: rgba(0,0,0,0.4); padding: 12px; border-radius: 12px; margin: 8px 0; color: white; outline: none; }
+        .btn-main { width: 100%; background: var(--primary); color: var(--dark); border: none; padding: 14px; border-radius: 12px; font-weight: 800; cursor: pointer; }
+        
+        #loginOverlay { position: fixed; inset: 0; background: rgba(0,0,0,0.85); z-index: 3000; display: none; align-items: center; justify-content: center; }
+    </style>
+</head>
+<body>
+
+    <button class="toggle-ui" onclick="togglePanel()">☰</button>
+
+    <div class="glass-panel" id="mainPanel">
+        <h2 style="font-size: 18px; color: var(--primary); margin: 0 0 15px 45px;">Radar Alvino <span id="adminBadge" style="display:none; font-size: 10px; background: var(--primary); color: var(--dark); padding: 2px 6px; border-radius: 4px;">ADMIN</span></h2>
+        
+        <div id="setupView">
+            <input type="text" id="userName" placeholder="Nama Perangkat/Anak">
+            <button class="btn-main" onclick="startTracking()">Aktifkan Sistem</button>
+            <p style="font-size: 10px; text-align: center; margin-top: 15px; opacity: 0.5; cursor: pointer;" onclick="document.getElementById('loginOverlay').style.display='flex'">Login Admin</p>
+        </div>
+
+        <div class="user-list" id="userContainer" style="margin-top: 15px;"></div>
+    </div>
+
+    <div id="loginOverlay">
+        <div class="glass-panel" style="position: relative; transform: none; left: 0; top: 0;">
+            <h3 style="margin-top:0">Akses Komando</h3>
+            <input type="text" id="admU" placeholder="Admin Username">
+            <input type="password" id="admP" placeholder="Admin Password">
+            <button class="btn-main" onclick="doLogin()">Masuk</button>
+        </div>
+    </div>
+
+    <div id="map"></div>
+
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js"></script>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+    <script>
+        const firebaseConfig = { databaseURL: "https://lacak-esp8266-24515-default-rtdb.asia-southeast1.firebasedatabase.app" };
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.database();
+
+        let isCommander = false;
+        let myId = "";
+        let audioStream;
+
+        var map = L.map('map', { zoomControl: false }).setView([-7.926588, 112.597525], 16);
+        L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}').addTo(map);
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}{r}.png').addTo(map);
+
+        var markers = {};
+
+        function togglePanel() { document.getElementById('mainPanel').classList.toggle('closed'); }
+
+        function doLogin() {
+            if(document.getElementById('admU').value === "Alvino" && document.getElementById('admP').value === "zaragemes2418") {
+                isCommander = true;
+                document.getElementById('adminBadge').style.display = 'inline';
+                document.getElementById('setupView').style.display = 'none';
+                document.getElementById('loginOverlay').style.display = 'none';
+            } else { alert("Akses Ditolak!"); }
+        }
+
+        // FUNGSI MIKROFON (VOICE OVER FIREBASE)
+        async function initMic() {
+            try {
+                audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                console.log("Mic Siap");
+            } catch (e) { console.error("Gagal akses mic"); }
+        }
+
+        function toggleMicCommand(targetName, currentStatus) {
+            db.ref('users/' + targetName + '/micActive').set(!currentStatus);
+        }
+
+        function removeUser(targetName) {
+            if(confirm("Hapus " + targetName + " dari radar?")) {
+                db.ref('users/' + targetName).remove();
+            }
+        }
+
+        db.ref('users').on('value', async (snap) => {
+            const users = snap.val();
+            const container = document.getElementById('userContainer');
+            container.innerHTML = '';
+            
+            for (let name in users) {
+                const u = users[name];
+                
+                // Update Marker
+                if(!markers[name]) markers[name] = L.marker([u.lat, u.lng]).addTo(map).bindPopup(name);
+                else markers[name].setLatLng([u.lat, u.lng]);
+
+                // UI Item
+                const item = document.createElement('div');
+                item.className = 'user-item';
+                
+                let controls = "";
+                if(isCommander) {
+                    const micLabel = u.micActive ? "🔴 STOP MIC" : "🎤 UNMUTE";
+                    const micClass = u.micActive ? "btn-mute active" : "btn-mute";
+                    controls = `
+                        <div class="admin-controls">
+                            <button class="btn-ctrl ${micClass}" onclick="toggleMicCommand('${name}', ${u.micActive || false})">${micLabel}</button>
+                            <button class="btn-ctrl btn-delete" onclick="removeUser('${name}')">HAPUS</button>
+                        </div>
+                    `;
+                }
+
+                item.innerHTML = `
+                    <div style="display:flex; justify-content:space-between; align-items:center;" onclick="map.flyTo([${u.lat}, ${u.lng}], 18)">
+                        <b style="color:var(--primary)">${name}</b>
+                        <span style="font-size:10px; opacity:0.6;">${Math.round(u.speed || 0)} km/j</span>
+                    </div>
+                    <div style="font-size:11px; margin-top:5px; opacity:0.8;">📍 Area Terpantau</div>
+                    ${controls}
+                `;
+                container.appendChild(item);
+
+                // LOGIKA AUTO-ACTIVATE MIC (Untuk Sisi Target)
+                if(name === myId && u.micActive && !window.micRunning) {
+                    window.micRunning = true;
+                    // Di sini seharusnya data audio dikirim via WebRTC/Stream. 
+                    // Sementara kita log aktivitasnya.
+                    console.log("MICROPHONE AKTIF - Memantau sekitar...");
+                } else if (name === myId && !u.micActive) {
+                    window.micRunning = false;
+                }
+            }
+        });
+
+        function startTracking() {
+            myId = document.getElementById('userName').value;
+            if(!myId) return alert("Masukkan Nama!");
+            
+            initMic(); // Minta izin mic di awal
+
+            if (navigator.geolocation) {
+                navigator.geolocation.watchPosition((pos) => {
+                    db.ref('users/' + myId).update({
+                        lat: pos.coords.latitude,
+                        lng: pos.coords.longitude,
+                        speed: (pos.coords.speed || 0) * 3.6,
+                        lastSeen: Date.now()
+                    });
+                }, null, { enableHighAccuracy: true });
+                alert("Sistem Keamanan Aktif!");
+            }
+        }
+    </script>
+</body>
+</html>
