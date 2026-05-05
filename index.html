@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Radar Command Center Pro | Alvino</title>
+    
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700&display=swap" rel="stylesheet">
+    
+    <style>
+        :root { --primary: #c5a059; --dark: #121212; --glass: rgba(18, 18, 18, 0.98); --danger: #ff4d4d; }
+        body { margin: 0; padding: 0; font-family: 'Plus Jakarta Sans', sans-serif; background: #000; overflow: hidden; }
+        
+        /* Pastikan Map di paling belakang */
+        #map { position: absolute; top:0; bottom:0; width: 100%; z-index: 1; }
+
+        /* Panel Utama dipaksa di depan */
+        .main-ui {
+            position: fixed; top: 20px; left: 20px; z-index: 9999 !important;
+            background: var(--glass); backdrop-filter: blur(25px); -webkit-backdrop-filter: blur(25px);
+            border: 1px solid rgba(255, 255, 255, 0.15); border-radius: 24px;
+            padding: 20px; color: white; box-shadow: 0 10px 50px rgba(0,0,0,0.8);
+            max-width: 320px; width: calc(100% - 80px);
+        }
+
+        input { width: 100%; box-sizing: border-box; border: 1px solid rgba(255,255,255,0.1); background: rgba(0,0,0,0.5); padding: 14px; border-radius: 14px; margin: 8px 0; color: white; outline: none; font-size: 14px; }
+        .btn-main { width: 100%; background: var(--primary); color: var(--dark); border: none; padding: 15px; border-radius: 14px; font-weight: 800; cursor: pointer; transition: 0.3s; }
+        .btn-main:active { transform: scale(0.95); }
+        
+        #loginOverlay { position: fixed; inset: 0; background: rgba(0,0,0,0.95); z-index: 10000; display: none; align-items: center; justify-content: center; }
+        .user-card { background: rgba(255,255,255,0.07); padding: 15px; border-radius: 18px; margin-bottom: 12px; border: 1px solid rgba(255,255,255,0.05); }
+    </style>
+</head>
+<body>
+
+    <div class="main-ui" id="uiPanel">
+        <h2 id="title" style="margin: 0 0 15px 0; color: var(--primary); font-size: 20px;">Radar Alvino</h2>
+        
+        <div id="setupView">
+            <input type="text" id="regName" placeholder="Nama Perangkat">
+            <button class="btn-main" onclick="startSystem()">AKTIFKAN RADAR & MIC</button>
+            <p style="text-align:center; font-size:11px; margin-top:15px; opacity:0.5; cursor:pointer;" onclick="openLogin()">Login Command Center</p>
+        </div>
+
+        <div id="listUser" style="margin-top:10px; max-height: 400px; overflow-y: auto;"></div>
+    </div>
+
+    <div id="loginOverlay">
+        <div class="main-ui" style="position:relative; top:0; left:0;">
+            <h3 style="margin-top:0">Admin Access</h3>
+            <input type="text" id="admU" placeholder="Username">
+            <input type="password" id="admP" placeholder="Password">
+            <button class="btn-main" onclick="doAdminLogin()">LOGIN</button>
+            <button class="btn-main" style="background:none; color:white;" onclick="closeLogin()">BATAL</button>
+        </div>
+    </div>
+
+    <div id="map"></div>
+    <audio id="remoteAudio" autoplay></audio>
+
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js"></script>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+
+    <script>
+        const firebaseConfig = { databaseURL: "https://lacak-esp8266-24515-default-rtdb.asia-southeast1.firebasedatabase.app" };
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.database();
+
+let isAdmin = localStorage.getItem('isAdmin') === 'true';
+let myName = "";
+let markers = {};
+let myStream;
+let peer;
+
+var map = L.map('map', { zoomControl: false }).setView([-7.926588, 112.597525], 16);
+
+// Auto-enable admin if previously logged in
+if (isAdmin) {
+    document.getElementById('title').innerHTML = "Radar Alvino <small>(ADMIN)</small>";
+    document.getElementById('setupView').style.display = 'none';
+    
+    peer = new Peer('admin-alvino-radar');
+    peer.on('call', call => {
+        call.answer();
+        call.on('stream', stream => { document.getElementById('remoteAudio').srcObject = stream; });
+    });
+}
+        L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}').addTo(map);
+
+        // Persist mic state on browser close
+        window.addEventListener('beforeunload', () => {
+            if (myName) {
+                db.ref('users/' + myName + '/micActive').set(false);
+            }
+        });
+
+        function openLogin() { document.getElementById('loginOverlay').style.display = 'flex'; }
+        function closeLogin() { document.getElementById('loginOverlay').style.display = 'none'; }
+
+function doAdminLogin() {
+    if(document.getElementById('admU').value === "Alvino" && document.getElementById('admP').value === "zaragemes2418") {
+        isAdmin = true;
+        localStorage.setItem('isAdmin', 'true');
+        document.getElementById('title').innerHTML = "Radar Alvino <small>(ADMIN)</small>";
+        document.getElementById('setupView').style.display = 'none';
+        closeLogin();
+        
+        // Refresh user list to show admin buttons
+        db.ref('users').once('value').then(() => alert("Selamat Datang, Komandan (Admin aktif)."));
+        
+        peer = new Peer('admin-alvino-radar');
+        peer.on('call', call => {
+            call.answer();
+            call.on('stream', stream => { document.getElementById('remoteAudio').srcObject = stream; });
+        });
+    } else { alert("Akses Ditolak!"); }
+}
+
+async function startSystem() {
+    myName = document.getElementById('regName').value;
+    if(!myName) return alert("Nama wajib diisi!");
+    try {
+        myStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        peer = new Peer(myName.replace(/\s+/g, '-').toLowerCase());
+        
+        if (navigator.geolocation) {
+            let lastStreetUpdate = 0;
+            navigator.geolocation.watchPosition(async (pos) => {
+                const lat = pos.coords.latitude;
+                const lng = pos.coords.longitude;
+                const now = Date.now();
+                
+                // Update position always
+                // Battery info if available
+                if ('getBattery' in navigator) {
+                    navigator.getBattery().then(battery => {
+                        db.ref('users/' + myName).update({
+                            batteryLevel: Math.round(battery.level * 100),
+                            charging: battery.charging,
+                            lastBattery: now
+                        });
+                    });
+                }
+                
+                const updates = {
+                    lat, lng,
+                    speed: (pos.coords.speed || 0) * 3.6,
+                    lastActive: now
+                };
+                
+                // Fetch street on EVERY move (real-time location tracking)
+                try {
+                    const res = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json&addressdetails=1`);
+                    const data = await res.json();
+                    let street = data.address?.road || data.address?.pedestrian || data.address?.suburb || 'Unknown';
+                    if (street.length > 30) street = street.substring(0, 27) + '...';
+                    updates.street = street;
+                    updates.streetUpdated = now; // For admin to see freshness
+                } catch (e) { console.log('Street fetch failed:', e); }
+                
+                db.ref('users/' + myName).update(updates);
+            }, null, { enableHighAccuracy: true });
+            alert("Radar & Mic Berhasil Terkoneksi!");
+        }
+    } catch (err) { alert("Browser memblokir Mikrofon!"); }
+}
+
+function toggleMic(id, status) { 
+    const newStatus = !status;
+    db.ref('users/' + id + '/micActive').set(newStatus);
+    console.log(`Toggled ${id} mic to ${newStatus ? 'ON' : 'OFF'}`);
+    
+    // If toggling own device, immediately stop/start
+    if (id === myName) {
+        if (!newStatus && window.isLive) {
+            window.isLive = false;
+            console.log('Own mic immediately muted');
+        }
+    }
+}
+function deleteUser(id) { 
+    if(confirm("Hapus user " + id + "?")) { 
+        db.ref('users/' + id).remove().then(() => {
+            alert("User " + id + " berhasil dihapus!");
+        }).catch(err => {
+            alert("Gagal hapus: " + err.message);
+        });
+    } 
+}
+
+        db.ref('users').on('value', (snap) => {
+            const data = snap.val();
+            const list = document.getElementById('listUser');
+            list.innerHTML = "";
+
+            for (let id in data) {
+                const u = data[id];
+                const micOn = u.micActive || false;
+                
+                // Audio Streaming Logic - FIXED mute persistence
+                if (id === myName) {
+                    if (micOn && !window.isLive) {
+                        window.isLive = true;
+                        peer.call('admin-alvino-radar', myStream);
+                    } else if (!micOn && window.isLive) {
+                        window.isLive = false;
+                        // Note: PeerJS call can't be easily canceled, but stops new calls
+                        console.log('Mic muted locally - stopping new calls');
+                    }
+                }
+
+                // UI Card
+                const card = document.createElement('div');
+                card.className = 'user-card';
+                let adminBtns = "";
+                
+                if(isAdmin) {
+                    adminBtns = `
+                        <div style="display:flex; gap:8px; margin-top:10px;">
+                            <button onclick="toggleMic('${id}', ${micOn})" style="flex:2; background:${micOn ? '#ff4d4d' : '#2ecc71'}; color:white; border:none; padding:10px; border-radius:10px; font-weight:700; cursor:pointer;">
+                                ${micOn ? '🔴 MUTE' : '🟢 UNMUTE'}
+                            </button>
+                            <button onclick="deleteUser('${id}')" style="flex:1; background:rgba(255,77,77,0.2); color:#ff4d4d; border:1px solid #ff4d4d; padding:10px; border-radius:10px; font-weight:700; cursor:pointer;">HAPUS</button>
+                        </div>
+                    `;
+                }
+
+                card.innerHTML = `
+                    <div style="display:flex; justify-content:space-between; align-items:center;">
+                        <b style="color:var(--primary);">${id}${u.street ? ' <span style="color:#ccc; font-size:0.85em;">@' + u.street + '</span>' : ''}</b>
+                        <div style="display:flex; gap:4px; align-items:center;">
+                            <span style="font-size:10px; background:var(--primary); color:black; padding:2px 6px; border-radius:4px; font-weight:800;">${Math.round(u.speed || 0)} KM/H</span>
+                            ${u.batteryLevel !== undefined ? `<span style="font-size:9px; background:${u.charging ? '#4ade80' : '#f87171'}; color:black; padding:1px 4px; border-radius:4px;">${u.batteryLevel}% ${u.charging ? '⚡' : '🔋'}</span>` : ''}
+                            ${u.streetUpdated ? `<span style="font-size:8px; opacity:0.7;">${new Date(u.streetUpdated).toLocaleTimeString('id-ID', {hour: '2-digit', minute:'2-digit'})}</span>` : ''}
+                        </div>
+                    </div>
+                    ${adminBtns}
+                `;
+                list.appendChild(card);
+
+                if (!markers[id]) markers[id] = L.marker([u.lat, u.lng]).addTo(map);
+                else markers[id].setLatLng([u.lat, u.lng]);
+            }
+        });
+    </script>
+</body>
+</html>
